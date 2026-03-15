@@ -61,52 +61,68 @@ WEEKDAY_NAMES_RU = {
     "sun": "Воскресенье",
 }
 
-main_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
-            InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
-        ],
-        [
-            InlineKeyboardButton(text="🧠 Коуч", callback_data="open_coach"),
-            InlineKeyboardButton(text="📂 Память", callback_data="open_memory"),
-        ],
-        [
-            InlineKeyboardButton(text="📊 Итог", callback_data="open_summary"),
-            InlineKeyboardButton(text="🌙 Разбор", callback_data="open_review"),
-        ],
-        [
-            InlineKeyboardButton(text="🧾 Неделя AI", callback_data="open_weekly_report"),
-        ],
-        [
-            InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
-        ],
-    ]
-)
 
-calendar_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="📆 В календарь", callback_data="make_calendar_file")],
-        [
-            InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
-            InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
-        ],
-        [
-            InlineKeyboardButton(text="🧠 Коуч", callback_data="open_coach"),
-            InlineKeyboardButton(text="📂 Память", callback_data="open_memory"),
-        ],
-        [
-            InlineKeyboardButton(text="📊 Итог", callback_data="open_summary"),
-            InlineKeyboardButton(text="🌙 Разбор", callback_data="open_review"),
-        ],
-        [
-            InlineKeyboardButton(text="🧾 Неделя AI", callback_data="open_weekly_report"),
-        ],
-        [
-            InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
-        ],
-    ]
-)
+def build_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
+                InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
+            ],
+            [
+                InlineKeyboardButton(text="📖 План дня", callback_data="show_day_plan"),
+                InlineKeyboardButton(text="🗂 План недели", callback_data="show_week_plan"),
+            ],
+            [
+                InlineKeyboardButton(text="🧠 Коуч", callback_data="open_coach"),
+                InlineKeyboardButton(text="📂 Память", callback_data="open_memory"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Итог", callback_data="open_summary"),
+                InlineKeyboardButton(text="🌙 Разбор", callback_data="open_review"),
+            ],
+            [
+                InlineKeyboardButton(text="🧾 Неделя AI", callback_data="open_weekly_report"),
+            ],
+            [
+                InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
+            ],
+        ]
+    )
+
+
+def build_calendar_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📆 В календарь", callback_data="make_calendar_file")],
+            [
+                InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
+                InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
+            ],
+            [
+                InlineKeyboardButton(text="📖 План дня", callback_data="show_day_plan"),
+                InlineKeyboardButton(text="🗂 План недели", callback_data="show_week_plan"),
+            ],
+            [
+                InlineKeyboardButton(text="🧠 Коуч", callback_data="open_coach"),
+                InlineKeyboardButton(text="📂 Память", callback_data="open_memory"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Итог", callback_data="open_summary"),
+                InlineKeyboardButton(text="🌙 Разбор", callback_data="open_review"),
+            ],
+            [
+                InlineKeyboardButton(text="🧾 Неделя AI", callback_data="open_weekly_report"),
+            ],
+            [
+                InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
+            ],
+        ]
+    )
+
+
+main_keyboard = build_main_keyboard()
+calendar_keyboard = build_calendar_keyboard()
 
 waiting_for_day_tasks = set()
 waiting_for_week_tasks = set()
@@ -130,6 +146,10 @@ def week_days_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🗓 Вся неделя", callback_data="show_full_week_plan"),
+            ],
+            [
+                InlineKeyboardButton(text="📖 План дня", callback_data="show_day_plan"),
+                InlineKeyboardButton(text="🗂 План недели", callback_data="show_week_plan"),
             ],
             [
                 InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
@@ -228,6 +248,7 @@ def ensure_user_memory(memory: dict, user_id: int) -> dict:
             "weekly_plan_text": "",
             "weekly_plan_days": empty_week_plan(),
             "weekly_plan_week_key": "",
+            "last_day_plan_date": "",
         }
     else:
         memory[key].setdefault("active_tasks", [])
@@ -242,6 +263,7 @@ def ensure_user_memory(memory: dict, user_id: int) -> dict:
         memory[key].setdefault("weekly_plan_text", "")
         memory[key].setdefault("weekly_plan_days", empty_week_plan())
         memory[key].setdefault("weekly_plan_week_key", "")
+        memory[key].setdefault("last_day_plan_date", "")
 
     return memory[key]
 
@@ -325,10 +347,7 @@ def weekday_date_by_key(day_key: str) -> datetime:
 def has_day_plan_for_user(user_id: int) -> bool:
     memory, _ = load_github_memory()
     user_memory = ensure_user_memory(memory, user_id)
-    return (
-        user_memory.get("last_plan_type") == "day"
-        and bool(user_memory.get("last_plan_text", "").strip())
-    )
+    return bool(user_memory.get("last_plan_text", "").strip()) and user_memory.get("last_plan_type") == "day"
 
 
 def has_week_plan_for_user(user_id: int) -> bool:
@@ -853,6 +872,12 @@ def build_coach_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
     )
     rows.append(
         [
+            InlineKeyboardButton(text="📖 План дня", callback_data="show_day_plan"),
+            InlineKeyboardButton(text="🗂 План недели", callback_data="show_week_plan"),
+        ]
+    )
+    rows.append(
+        [
             InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
             InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
         ]
@@ -928,6 +953,7 @@ def build_memory_text(user_id: int) -> str:
 
     parts.append(f"\nВечерних разборов сохранено: {reviews_count}")
     parts.append(f"Недельный план в памяти: {'да' if week_key else 'нет'}")
+    parts.append(f"План дня в памяти: {'да' if has_day_plan_for_user(user_id) else 'нет'}")
 
     return "\n".join(parts)
 
@@ -1024,6 +1050,31 @@ def build_full_week_text(user_id: int) -> str:
     return "\n".join(lines).strip()
 
 
+def get_saved_day_plan_text(user_id: int) -> str:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    plan_text = user_memory.get("last_plan_text", "").strip()
+    plan_type = user_memory.get("last_plan_type", "")
+
+    if plan_type != "day" or not plan_text:
+        return "Пока нет сохранённого плана на завтра. Нажми «📅 День» и отправь задачи."
+
+    return plan_text
+
+
+def get_saved_week_plan_text(user_id: int) -> str:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    plan_text = user_memory.get("weekly_plan_text", "").strip()
+
+    if not plan_text:
+        return "Пока нет сохранённого недельного плана. Нажми «🗓 Неделя» и отправь задачи."
+
+    return plan_text
+
+
 async def process_text_input(message: Message, text: str):
     user_id = message.from_user.id
     register_user_persistently(user_id)
@@ -1085,6 +1136,7 @@ async def process_text_input(message: Message, text: str):
             user_memory = ensure_user_memory(memory, user_id)
             user_memory["last_plan_text"] = result
             user_memory["last_plan_type"] = "day"
+            user_memory["last_day_plan_date"] = next_day_date().strftime("%Y-%m-%d")
             save_github_memory(memory, sha)
 
             waiting_for_day_tasks.discard(user_id)
@@ -1374,6 +1426,26 @@ async def open_weekly_report(callback: CallbackQuery):
             reply_markup=main_keyboard
         )
 
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "show_day_plan")
+async def show_day_plan(callback: CallbackQuery):
+    register_user_persistently(callback.from_user.id)
+    await callback.message.answer(
+        get_saved_day_plan_text(callback.from_user.id),
+        reply_markup=calendar_keyboard
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "show_week_plan")
+async def show_week_plan(callback: CallbackQuery):
+    register_user_persistently(callback.from_user.id)
+    await callback.message.answer(
+        get_saved_week_plan_text(callback.from_user.id),
+        reply_markup=calendar_keyboard
+    )
     await callback.answer()
 
 
