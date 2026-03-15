@@ -7,6 +7,16 @@
       "3 встречи"
     ],
     "moved_tasks": [],
-    "last_summary": ""
+    "last_summary": "",
+    "last_plan_text": "",
+    "last_plan_type": "",
+    "last_review": "",
+    "daily_reviews": [],
+    "weekly_reports": []
+  },
+  "_meta": {
+    "registered_users": [
+      426951090
+    ]
   }
 }
