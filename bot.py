@@ -120,6 +120,8 @@ def ensure_user_memory(memory: dict, user_id: int) -> dict:
             "done_tasks": [],
             "moved_tasks": [],
             "last_summary": "",
+            "last_plan_text": "",
+            "last_plan_type": "",
         }
     return memory[key]
 
@@ -130,10 +132,39 @@ def parse_tasks_from_text(text: str) -> list[str]:
 
 
 def analyze_tasks_with_ai(tasks_text: str, planning_type: str) -> str:
+    if planning_type == "завтра":
+        planning_rules = """
+Сделай план как умный AI-планировщик дня, похожий на Motion.
+
+Правила:
+- День по умолчанию: 09:00–18:00.
+- Добавь 1 обеденный блок 13:00–14:00.
+- После 2-3 умственных задач добавляй короткий буфер или переключение 15–30 минут.
+- Большие задачи дели на части.
+- Не перегружай день.
+- Если задач много, честно переноси часть в "Убрать / перенести".
+- В начале дня ставь самые важные и требующие концентрации задачи.
+- Рутину и лёгкие задачи ставь позже.
+- Не делай план хаотичным: он должен быть реалистичным.
+"""
+    else:
+        planning_rules = """
+Сделай план как умный AI-планировщик недели.
+
+Правила:
+- Разложи задачи по дням недели блоками.
+- Не ставь всё в один день.
+- Тяжёлые задачи распределяй.
+- Если задач слишком много, часть перенеси.
+- План должен быть реалистичным и не перегруженным.
+"""
+
     prompt = f"""
 Ты помощник по планированию.
 
 Пользователь прислал список задач на {planning_type}.
+
+{planning_rules}
 
 Твоя задача:
 
@@ -151,8 +182,14 @@ def analyze_tasks_with_ai(tasks_text: str, planning_type: str) -> str:
 - высокий
 
 4. Предложить примерный план по времени.
-Если это план на день — исходи из дня 09:00–18:00.
-Если это план на неделю — предложи несколько блоков по дням недели.
+
+Если это план на день — обязательно:
+- используй интервалы времени
+- добавь буферы
+- добавь обед
+- разбей крупные задачи на части
+
+Если это план на неделю — предложи блоки по дням недели.
 
 Отвечай строго в таком формате:
 
@@ -288,6 +325,47 @@ def get_reminder_status(user_id: int, reminder_type: str) -> bool:
     return reminder_status.get(key, False)
 
 
+def build_coach_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+    tasks = user_memory["active_tasks"]
+
+    rows = []
+
+    max_buttons = min(len(tasks), 3)
+
+    if max_buttons > 0:
+        done_row = []
+        move_row = []
+
+        for i in range(max_buttons):
+            done_row.append(
+                InlineKeyboardButton(text=f"✅ {i+1}", callback_data=f"done_{i+1}")
+            )
+            move_row.append(
+                InlineKeyboardButton(text=f"⏭ {i+1}", callback_data=f"move_{i+1}")
+            )
+
+        rows.append(done_row)
+        rows.append(move_row)
+
+    rows.append([InlineKeyboardButton(text="🔄 Обновить коуч", callback_data="open_coach")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="📂 Память", callback_data="open_memory"),
+            InlineKeyboardButton(text="📊 Итог", callback_data="open_summary"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
+            InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
+        ]
+    )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def send_daily_reminder():
     for user_id in registered_users:
         try:
@@ -378,9 +456,10 @@ def build_coach_text(user_id: int) -> str:
     for i, task in enumerate(tasks, start=1):
         lines.append(f"{i}. {task}")
 
-    lines.append("\nКоманды:")
-    lines.append("сделано 1")
-    lines.append("перенос 2")
+    lines.append("\nБыстрые действия кнопками ниже.")
+    lines.append("Если задач больше трёх — для остальных можно писать:")
+    lines.append("сделано 4")
+    lines.append("перенос 5")
     lines.append("итог")
 
     return "\n".join(lines)
@@ -436,11 +515,39 @@ def build_summary_text(user_id: int) -> str:
     )
 
 
+def apply_done_by_index(user_id: int, index: int) -> str:
+    memory, sha = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+    tasks = user_memory["active_tasks"]
+
+    if index < 0 or index >= len(tasks):
+        return "Нет задачи с таким номером."
+
+    task = tasks.pop(index)
+    user_memory["done_tasks"].append(task)
+    save_github_memory(memory, sha)
+    return f"✅ Сделано: {task}"
+
+
+def apply_move_by_index(user_id: int, index: int) -> str:
+    memory, sha = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+    tasks = user_memory["active_tasks"]
+
+    if index < 0 or index >= len(tasks):
+        return "Нет задачи с таким номером."
+
+    task = tasks.pop(index)
+    user_memory["moved_tasks"].append(task)
+    save_github_memory(memory, sha)
+    return f"⏭ Перенесла: {task}"
+
+
 @dp.message(Command("start"))
 async def start(message: Message):
     registered_users.add(message.from_user.id)
     await message.answer(
-        "Привет! Я твой AI-помощник.\nНажми кнопку, чтобы начать планирование.",
+        "Привет! Я твой AI-помощник.\nНажми кнопку ниже, чтобы начать планирование.",
         reply_markup=main_keyboard
     )
 
@@ -448,7 +555,10 @@ async def start(message: Message):
 @dp.message(Command("coach"))
 @dp.message(Command("коуч"))
 async def coach_mode(message: Message):
-    await message.answer(build_coach_text(message.from_user.id), reply_markup=main_keyboard)
+    await message.answer(
+        build_coach_text(message.from_user.id),
+        reply_markup=build_coach_actions_keyboard(message.from_user.id)
+    )
 
 
 @dp.message(Command("memory"))
@@ -459,7 +569,10 @@ async def memory_view(message: Message):
 
 @dp.callback_query(F.data == "open_coach")
 async def open_coach(callback: CallbackQuery):
-    await callback.message.answer(build_coach_text(callback.from_user.id), reply_markup=main_keyboard)
+    await callback.message.answer(
+        build_coach_text(callback.from_user.id),
+        reply_markup=build_coach_actions_keyboard(callback.from_user.id)
+    )
     await callback.answer()
 
 
@@ -472,6 +585,22 @@ async def open_memory(callback: CallbackQuery):
 @dp.callback_query(F.data == "open_summary")
 async def open_summary(callback: CallbackQuery):
     await callback.message.answer(build_summary_text(callback.from_user.id), reply_markup=main_keyboard)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("done_"))
+async def quick_done(callback: CallbackQuery):
+    index = int(callback.data.split("_")[1]) - 1
+    text = apply_done_by_index(callback.from_user.id, index)
+    await callback.message.answer(text, reply_markup=build_coach_actions_keyboard(callback.from_user.id))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("move_"))
+async def quick_move(callback: CallbackQuery):
+    index = int(callback.data.split("_")[1]) - 1
+    text = apply_move_by_index(callback.from_user.id, index)
+    await callback.message.answer(text, reply_markup=build_coach_actions_keyboard(callback.from_user.id))
     await callback.answer()
 
 
@@ -541,39 +670,15 @@ async def make_calendar_file_handler(callback: CallbackQuery):
 @dp.message(F.text.regexp(r"^сделано\s+\d+$"))
 async def mark_done(message: Message):
     index = int(message.text.split()[1]) - 1
-
-    memory, sha = load_github_memory()
-    user_memory = ensure_user_memory(memory, message.from_user.id)
-    tasks = user_memory["active_tasks"]
-
-    if index < 0 or index >= len(tasks):
-        await message.answer("Нет задачи с таким номером.", reply_markup=main_keyboard)
-        return
-
-    task = tasks.pop(index)
-    user_memory["done_tasks"].append(task)
-    save_github_memory(memory, sha)
-
-    await message.answer(f"✅ Сделано: {task}", reply_markup=main_keyboard)
+    text = apply_done_by_index(message.from_user.id, index)
+    await message.answer(text, reply_markup=build_coach_actions_keyboard(message.from_user.id))
 
 
 @dp.message(F.text.regexp(r"^перенос\s+\d+$"))
 async def mark_moved(message: Message):
     index = int(message.text.split()[1]) - 1
-
-    memory, sha = load_github_memory()
-    user_memory = ensure_user_memory(memory, message.from_user.id)
-    tasks = user_memory["active_tasks"]
-
-    if index < 0 or index >= len(tasks):
-        await message.answer("Нет задачи с таким номером.", reply_markup=main_keyboard)
-        return
-
-    task = tasks.pop(index)
-    user_memory["moved_tasks"].append(task)
-    save_github_memory(memory, sha)
-
-    await message.answer(f"⏭ Перенесла: {task}", reply_markup=main_keyboard)
+    text = apply_move_by_index(message.from_user.id, index)
+    await message.answer(text, reply_markup=build_coach_actions_keyboard(message.from_user.id))
 
 
 @dp.message(F.text.lower() == "итог")
@@ -603,10 +708,19 @@ async def handle_tasks(message: Message):
             memory, sha = load_github_memory()
             user_memory = ensure_user_memory(memory, user_id)
             user_memory["active_tasks"] = tasks
+            user_memory["done_tasks"] = []
+            user_memory["moved_tasks"] = []
             save_github_memory(memory, sha)
 
             result = analyze_tasks_with_ai(message.text, "завтра")
             last_plan_by_user[user_id] = result
+
+            memory, sha = load_github_memory()
+            user_memory = ensure_user_memory(memory, user_id)
+            user_memory["last_plan_text"] = result
+            user_memory["last_plan_type"] = "day"
+            save_github_memory(memory, sha)
+
             await message.answer(result, reply_markup=calendar_keyboard)
             waiting_for_day_tasks.discard(user_id)
         except Exception as e:
@@ -623,10 +737,19 @@ async def handle_tasks(message: Message):
             memory, sha = load_github_memory()
             user_memory = ensure_user_memory(memory, user_id)
             user_memory["active_tasks"] = tasks
+            user_memory["done_tasks"] = []
+            user_memory["moved_tasks"] = []
             save_github_memory(memory, sha)
 
             result = analyze_tasks_with_ai(message.text, "неделю")
             last_plan_by_user[user_id] = result
+
+            memory, sha = load_github_memory()
+            user_memory = ensure_user_memory(memory, user_id)
+            user_memory["last_plan_text"] = result
+            user_memory["last_plan_type"] = "week"
+            save_github_memory(memory, sha)
+
             await message.answer(result, reply_markup=calendar_keyboard)
             waiting_for_week_tasks.discard(user_id)
         except Exception as e:
