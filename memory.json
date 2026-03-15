@@ -23,7 +23,8 @@
       "sat": [],
       "sun": []
     },
-    "weekly_plan_week_key": ""
+    "weekly_plan_week_key": "",
+    "last_day_plan_date": ""
   },
   "_meta": {
     "registered_users": [
