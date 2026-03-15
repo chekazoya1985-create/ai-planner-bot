@@ -41,6 +41,26 @@ BAD_TASK_INPUTS = {
     "спасибо", "thanks", "понятно", "ясно", "test", "тест"
 }
 
+WEEKDAY_KEYS = [
+    ("mon", "Пн"),
+    ("tue", "Вт"),
+    ("wed", "Ср"),
+    ("thu", "Чт"),
+    ("fri", "Пт"),
+    ("sat", "Сб"),
+    ("sun", "Вс"),
+]
+
+WEEKDAY_NAMES_RU = {
+    "mon": "Понедельник",
+    "tue": "Вторник",
+    "wed": "Среда",
+    "thu": "Четверг",
+    "fri": "Пятница",
+    "sat": "Суббота",
+    "sun": "Воскресенье",
+}
+
 main_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
         [
@@ -57,6 +77,9 @@ main_keyboard = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton(text="🧾 Неделя AI", callback_data="open_weekly_report"),
+        ],
+        [
+            InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
         ],
     ]
 )
@@ -79,6 +102,9 @@ calendar_keyboard = InlineKeyboardMarkup(
         [
             InlineKeyboardButton(text="🧾 Неделя AI", callback_data="open_weekly_report"),
         ],
+        [
+            InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
+        ],
     ]
 )
 
@@ -86,6 +112,31 @@ waiting_for_day_tasks = set()
 waiting_for_week_tasks = set()
 waiting_for_review = set()
 reminder_status = {}
+
+
+def week_days_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Пн", callback_data="week_day_mon"),
+                InlineKeyboardButton(text="Вт", callback_data="week_day_tue"),
+                InlineKeyboardButton(text="Ср", callback_data="week_day_wed"),
+                InlineKeyboardButton(text="Чт", callback_data="week_day_thu"),
+            ],
+            [
+                InlineKeyboardButton(text="Пт", callback_data="week_day_fri"),
+                InlineKeyboardButton(text="Сб", callback_data="week_day_sat"),
+                InlineKeyboardButton(text="Вс", callback_data="week_day_sun"),
+            ],
+            [
+                InlineKeyboardButton(text="🗓 Вся неделя", callback_data="show_full_week_plan"),
+            ],
+            [
+                InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
+                InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
+            ],
+        ]
+    )
 
 
 def now_moscow() -> datetime:
@@ -148,6 +199,18 @@ def ensure_global_memory(memory: dict) -> dict:
     return memory["_meta"]
 
 
+def empty_week_plan() -> dict:
+    return {
+        "mon": [],
+        "tue": [],
+        "wed": [],
+        "thu": [],
+        "fri": [],
+        "sat": [],
+        "sun": [],
+    }
+
+
 def ensure_user_memory(memory: dict, user_id: int) -> dict:
     key = str(user_id)
 
@@ -162,6 +225,9 @@ def ensure_user_memory(memory: dict, user_id: int) -> dict:
             "last_review": "",
             "daily_reviews": [],
             "weekly_reports": [],
+            "weekly_plan_text": "",
+            "weekly_plan_days": empty_week_plan(),
+            "weekly_plan_week_key": "",
         }
     else:
         memory[key].setdefault("active_tasks", [])
@@ -173,6 +239,9 @@ def ensure_user_memory(memory: dict, user_id: int) -> dict:
         memory[key].setdefault("last_review", "")
         memory[key].setdefault("daily_reviews", [])
         memory[key].setdefault("weekly_reports", [])
+        memory[key].setdefault("weekly_plan_text", "")
+        memory[key].setdefault("weekly_plan_days", empty_week_plan())
+        memory[key].setdefault("weekly_plan_week_key", "")
 
     return memory[key]
 
@@ -215,6 +284,42 @@ def looks_like_task_list(text: str) -> bool:
         return False
 
     return True
+
+
+def format_russian_date(dt: datetime) -> str:
+    months = {
+        1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+        5: "мая", 6: "июня", 7: "июля", 8: "августа",
+        9: "сентября", 10: "октября", 11: "ноября", 12: "декабря"
+    }
+    weekdays = {
+        0: "понедельник", 1: "вторник", 2: "среда", 3: "четверг",
+        4: "пятница", 5: "суббота", 6: "воскресенье"
+    }
+    return f"{dt.day} {months[dt.month]} {dt.year} ({weekdays[dt.weekday()]})"
+
+
+def next_day_date() -> datetime:
+    return now_moscow() + timedelta(days=1)
+
+
+def get_current_week_monday() -> datetime:
+    current = now_moscow()
+    return current - timedelta(days=current.weekday())
+
+
+def weekday_date_by_key(day_key: str) -> datetime:
+    monday = get_current_week_monday()
+    offset_map = {
+        "mon": 0,
+        "tue": 1,
+        "wed": 2,
+        "thu": 3,
+        "fri": 4,
+        "sat": 5,
+        "sun": 6,
+    }
+    return monday + timedelta(days=offset_map[day_key])
 
 
 def get_planning_memory_context(user_id: int) -> str:
@@ -366,6 +471,83 @@ def analyze_tasks_with_ai(user_id: int, tasks_text: str, planning_type: str) -> 
         input=prompt,
     )
     return response.output_text.strip()
+
+
+def build_day_plan_header(ai_text: str) -> str:
+    plan_date = next_day_date()
+    header = f"📅 План на день — {format_russian_date(plan_date)}\n\n"
+    return header + ai_text
+
+
+def build_week_plan_header(ai_text: str) -> str:
+    monday = get_current_week_monday()
+    sunday = monday + timedelta(days=6)
+    header = (
+        f"🗓 План на неделю — "
+        f"{format_russian_date(monday)} → {format_russian_date(sunday)}\n\n"
+    )
+    return header + ai_text
+
+
+def extract_json_object(text: str) -> dict:
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        raise ValueError("Не удалось найти JSON в ответе AI.")
+    return json.loads(match.group(0))
+
+
+def build_week_plan_days_with_ai(user_id: int, tasks_text: str) -> dict:
+    memory_context = get_planning_memory_context(user_id)
+
+    prompt = f"""
+Ты AI-планировщик недели.
+
+Нужно разложить задачи пользователя по дням недели в JSON.
+Учитывай прошлые переносы и последние разборы дня, чтобы не перегружать одни и те же дни.
+
+Контекст из памяти:
+{memory_context}
+
+Правила:
+- возвращай только JSON без пояснений
+- ключи строго: mon, tue, wed, thu, fri, sat, sun
+- значение каждого ключа — список строк-задач
+- задачи должны быть короткими
+- если задача большая, можно разбить её на части
+- распределяй реалистично
+- не ставь всё в один день
+
+Задачи:
+{tasks_text}
+
+Пример формата:
+{{
+  "mon": ["Задача 1", "Задача 2"],
+  "tue": ["Задача 3"],
+  "wed": [],
+  "thu": [],
+  "fri": [],
+  "sat": [],
+  "sun": []
+}}
+""".strip()
+
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=prompt,
+    )
+    raw_text = response.output_text.strip()
+    data = extract_json_object(raw_text)
+
+    clean = empty_week_plan()
+    for key in clean:
+        value = data.get(key, [])
+        if isinstance(value, list):
+            clean[key] = [str(x).strip() for x in value if str(x).strip()]
+        else:
+            clean[key] = []
+
+    return clean
 
 
 def analyze_day_review_with_ai(user_id: int, user_text: str) -> str:
@@ -568,7 +750,7 @@ def make_ics_file(user_id: int, ai_text: str) -> str:
     if not plan_items:
         raise ValueError("В ответе AI не найден блок 'План:' с временем.")
 
-    tomorrow = now_moscow() + timedelta(days=1)
+    tomorrow = next_day_date()
     date_str = tomorrow.strftime("%Y%m%d")
 
     file_name = f"plan_{user_id}.ics"
@@ -665,6 +847,11 @@ def build_coach_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🧾 Неделя AI", callback_data="open_weekly_report"),
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
+        ]
+    )
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -698,6 +885,7 @@ def build_memory_text(user_id: int) -> str:
     done = user_memory["done_tasks"]
     moved = user_memory["moved_tasks"]
     reviews_count = len(user_memory.get("daily_reviews", []))
+    week_key = user_memory.get("weekly_plan_week_key", "")
 
     parts = ["Память задач:\n"]
 
@@ -723,6 +911,7 @@ def build_memory_text(user_id: int) -> str:
         parts.append("— пусто")
 
     parts.append(f"\nВечерних разборов сохранено: {reviews_count}")
+    parts.append(f"Недельный план в памяти: {'да' if week_key else 'нет'}")
 
     return "\n".join(parts)
 
@@ -771,6 +960,52 @@ def apply_move_by_index(user_id: int, index: int) -> str:
     user_memory["moved_tasks"].append(task)
     save_github_memory(memory, sha)
     return f"⏭ Перенесла: {task}"
+
+
+def build_weekday_text(user_id: int, day_key: str) -> str:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    week_plan = user_memory.get("weekly_plan_days", empty_week_plan())
+    tasks = week_plan.get(day_key, [])
+    date_for_day = weekday_date_by_key(day_key)
+    title = WEEKDAY_NAMES_RU[day_key]
+
+    lines = [f"📚 {title} — {format_russian_date(date_for_day)}", ""]
+
+    if tasks:
+        for i, task in enumerate(tasks, start=1):
+            lines.append(f"{i}. {task}")
+    else:
+        lines.append("На этот день задач пока нет.")
+
+    return "\n".join(lines)
+
+
+def build_full_week_text(user_id: int) -> str:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    week_plan = user_memory.get("weekly_plan_days", empty_week_plan())
+    has_any = any(week_plan.get(key) for key, _ in WEEKDAY_KEYS)
+
+    if not has_any:
+        return "Пока нет сохранённого недельного плана. Сначала нажми «🗓 Неделя»."
+
+    lines = ["🗓 Задачи по дням недели", ""]
+
+    for key, _short_name in WEEKDAY_KEYS:
+        date_for_day = weekday_date_by_key(key)
+        lines.append(f"{WEEKDAY_NAMES_RU[key]} — {format_russian_date(date_for_day)}")
+        tasks = week_plan.get(key, [])
+        if tasks:
+            for task in tasks:
+                lines.append(f"— {task}")
+        else:
+            lines.append("— пусто")
+        lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 async def process_text_input(message: Message, text: str):
@@ -827,7 +1062,8 @@ async def process_text_input(message: Message, text: str):
             user_memory["moved_tasks"] = []
             save_github_memory(memory, sha)
 
-            result = analyze_tasks_with_ai(user_id, text, "завтра")
+            ai_result = analyze_tasks_with_ai(user_id, text, "завтра")
+            result = build_day_plan_header(ai_result)
 
             memory, sha = load_github_memory()
             user_memory = ensure_user_memory(memory, user_id)
@@ -863,16 +1099,26 @@ async def process_text_input(message: Message, text: str):
             user_memory["moved_tasks"] = []
             save_github_memory(memory, sha)
 
-            result = analyze_tasks_with_ai(user_id, text, "неделю")
+            ai_result = analyze_tasks_with_ai(user_id, text, "неделю")
+            result = build_week_plan_header(ai_result)
+
+            week_days_data = build_week_plan_days_with_ai(user_id, text)
 
             memory, sha = load_github_memory()
             user_memory = ensure_user_memory(memory, user_id)
             user_memory["last_plan_text"] = result
             user_memory["last_plan_type"] = "week"
+            user_memory["weekly_plan_text"] = result
+            user_memory["weekly_plan_days"] = week_days_data
+            user_memory["weekly_plan_week_key"] = current_week_key()
             save_github_memory(memory, sha)
 
             waiting_for_week_tasks.discard(user_id)
             await message.answer(result, reply_markup=calendar_keyboard)
+            await message.answer(
+                "Сохранила задачи по дням недели. Можно открыть любой день кнопкой ниже.",
+                reply_markup=week_days_keyboard()
+            )
         except Exception as e:
             await message.answer(f"Ошибка: {e}", reply_markup=main_keyboard)
         return
@@ -1115,6 +1361,37 @@ async def open_weekly_report(callback: CallbackQuery):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "open_week_days")
+async def open_week_days(callback: CallbackQuery):
+    register_user_persistently(callback.from_user.id)
+    await callback.message.answer(
+        "Выбери день недели, чтобы посмотреть задачи.",
+        reply_markup=week_days_keyboard()
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("week_day_"))
+async def show_week_day(callback: CallbackQuery):
+    register_user_persistently(callback.from_user.id)
+    day_key = callback.data.replace("week_day_", "")
+    await callback.message.answer(
+        build_weekday_text(callback.from_user.id, day_key),
+        reply_markup=week_days_keyboard()
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "show_full_week_plan")
+async def show_full_week_plan(callback: CallbackQuery):
+    register_user_persistently(callback.from_user.id)
+    await callback.message.answer(
+        build_full_week_text(callback.from_user.id),
+        reply_markup=week_days_keyboard()
+    )
+    await callback.answer()
+
+
 @dp.callback_query(F.data.startswith("done_"))
 async def quick_done(callback: CallbackQuery):
     register_user_persistently(callback.from_user.id)
@@ -1143,8 +1420,11 @@ async def plan_day(callback: CallbackQuery):
     waiting_for_review.discard(user_id)
     set_reminder_status(user_id, "day", True)
 
+    plan_date = next_day_date()
     await callback.message.answer(
-        "Напиши задачи на завтра списком.\nМожно текстом или голосовым.\nЕсли передумала — отправь /сброс"
+        f"Напиши задачи на день — {format_russian_date(plan_date)}.\n"
+        f"Можно текстом или голосовым.\n"
+        f"Если передумала — отправь /сброс"
     )
     await callback.answer()
 
@@ -1159,8 +1439,14 @@ async def plan_week(callback: CallbackQuery):
     waiting_for_review.discard(user_id)
     set_reminder_status(user_id, "week", True)
 
+    monday = get_current_week_monday()
+    sunday = monday + timedelta(days=6)
+
     await callback.message.answer(
-        "Напиши задачи на неделю списком.\nМожно текстом или голосовым.\nЕсли передумала — отправь /сброс"
+        f"Напиши задачи на неделю:\n"
+        f"{format_russian_date(monday)} → {format_russian_date(sunday)}\n"
+        f"Можно текстом или голосовым.\n"
+        f"Если передумала — отправь /сброс"
     )
     await callback.answer()
 
