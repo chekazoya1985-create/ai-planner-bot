@@ -31,6 +31,11 @@ dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
 scheduler = AsyncIOScheduler()
 
+BAD_TASK_INPUTS = {
+    "привет", "hello", "hi", "ок", "okay", "ага", "да", "нет",
+    "спасибо", "thanks", "понятно", "ясно", "test", "тест"
+}
+
 main_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
         [
@@ -129,6 +134,22 @@ def ensure_user_memory(memory: dict, user_id: int) -> dict:
 def parse_tasks_from_text(text: str) -> list[str]:
     tasks = [line.strip("•-– ").strip() for line in text.splitlines()]
     return [t for t in tasks if t]
+
+
+def looks_like_task_list(text: str) -> bool:
+    clean = text.strip().lower()
+
+    if clean in BAD_TASK_INPUTS:
+        return False
+
+    lines = [line.strip("•-– ").strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    if len(lines) == 1 and len(lines[0]) < 8:
+        return False
+
+    return True
 
 
 def analyze_tasks_with_ai(tasks_text: str, planning_type: str) -> str:
@@ -567,6 +588,19 @@ async def memory_view(message: Message):
     await message.answer(build_memory_text(message.from_user.id), reply_markup=main_keyboard)
 
 
+@dp.message(Command("cancel"))
+@dp.message(Command("сброс"))
+async def cancel_input(message: Message):
+    user_id = message.from_user.id
+    waiting_for_day_tasks.discard(user_id)
+    waiting_for_week_tasks.discard(user_id)
+
+    await message.answer(
+        "Ок, сбросила ожидание ввода задач.",
+        reply_markup=main_keyboard
+    )
+
+
 @dp.callback_query(F.data == "open_coach")
 async def open_coach(callback: CallbackQuery):
     await callback.message.answer(
@@ -613,7 +647,8 @@ async def plan_day(callback: CallbackQuery):
     set_reminder_status(user_id, "day", True)
 
     await callback.message.answer(
-        "Напиши задачи на завтра списком.\nМожно просто каждая задача с новой строки."
+        "Напиши задачи на завтра списком.\nМожно просто каждая задача с новой строки.\n"
+        "Если передумала — отправь /сброс"
     )
     await callback.answer()
 
@@ -627,7 +662,8 @@ async def plan_week(callback: CallbackQuery):
     set_reminder_status(user_id, "week", True)
 
     await callback.message.answer(
-        "Напиши задачи на неделю списком.\nМожно просто каждая задача с новой строки."
+        "Напиши задачи на неделю списком.\nМожно просто каждая задача с новой строки.\n"
+        "Если передумала — отправь /сброс"
     )
     await callback.answer()
 
@@ -700,6 +736,16 @@ async def handle_tasks(message: Message):
 
     if user_id in waiting_for_day_tasks:
         set_reminder_status(user_id, "day", True)
+
+        if not looks_like_task_list(message.text):
+            await message.answer(
+                "Это не похоже на список задач.\n"
+                "Напиши задачи списком, каждая с новой строки.\n"
+                "Или отправь /сброс",
+                reply_markup=main_keyboard
+            )
+            return
+
         await message.answer("Смотрю задачи на день...")
 
         try:
@@ -729,6 +775,16 @@ async def handle_tasks(message: Message):
 
     if user_id in waiting_for_week_tasks:
         set_reminder_status(user_id, "week", True)
+
+        if not looks_like_task_list(message.text):
+            await message.answer(
+                "Это не похоже на список задач.\n"
+                "Напиши задачи списком, каждая с новой строки.\n"
+                "Или отправь /сброс",
+                reply_markup=main_keyboard
+            )
+            return
+
         await message.answer("Смотрю задачи на неделю...")
 
         try:
