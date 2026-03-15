@@ -87,6 +87,9 @@ def build_main_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
             ],
+            [
+                InlineKeyboardButton(text="🗑 Очистить память", callback_data="clear_memory"),
+            ],
         ]
     )
 
@@ -116,6 +119,9 @@ def build_calendar_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
+            ],
+            [
+                InlineKeyboardButton(text="🗑 Очистить память", callback_data="clear_memory"),
             ],
         ]
     )
@@ -839,6 +845,27 @@ def get_reminder_status(user_id: int, reminder_type: str) -> bool:
     return reminder_status.get(key, False)
 
 
+def clear_user_memory_data(user_id: int) -> None:
+    memory, sha = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    user_memory["active_tasks"] = []
+    user_memory["done_tasks"] = []
+    user_memory["moved_tasks"] = []
+    user_memory["last_summary"] = ""
+    user_memory["last_plan_text"] = ""
+    user_memory["last_plan_type"] = ""
+    user_memory["last_review"] = ""
+    user_memory["daily_reviews"] = []
+    user_memory["weekly_reports"] = []
+    user_memory["weekly_plan_text"] = ""
+    user_memory["weekly_plan_days"] = empty_week_plan()
+    user_memory["weekly_plan_week_key"] = ""
+    user_memory["last_day_plan_date"] = ""
+
+    save_github_memory(memory, sha)
+
+
 def build_coach_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
     memory, _ = load_github_memory()
     user_memory = ensure_user_memory(memory, user_id)
@@ -891,6 +918,11 @@ def build_coach_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(text="📚 Дни недели", callback_data="open_week_days"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(text="🗑 Очистить память", callback_data="clear_memory"),
         ]
     )
 
@@ -1060,6 +1092,11 @@ def get_saved_day_plan_text(user_id: int) -> str:
     if plan_type != "day" or not plan_text:
         return "Пока нет сохранённого плана на завтра. Нажми «📅 День» и отправь задачи."
 
+    if "📅 План на день" not in plan_text:
+        plan_date = next_day_date()
+        header = f"📅 План на день — {format_russian_date(plan_date)}\n\n"
+        return header + plan_text
+
     return plan_text
 
 
@@ -1071,6 +1108,15 @@ def get_saved_week_plan_text(user_id: int) -> str:
 
     if not plan_text:
         return "Пока нет сохранённого недельного плана. Нажми «🗓 Неделя» и отправь задачи."
+
+    if "🗓 План на неделю" not in plan_text:
+        monday = get_current_week_monday()
+        sunday = monday + timedelta(days=6)
+        header = (
+            f"🗓 План на неделю — "
+            f"{format_russian_date(monday)} → {format_russian_date(sunday)}\n\n"
+        )
+        return header + plan_text
 
     return plan_text
 
@@ -1351,6 +1397,23 @@ async def weekly_report(message: Message):
         await message.answer(f"Ошибка недельной аналитики: {e}", reply_markup=main_keyboard)
 
 
+@dp.message(Command("clear"))
+@dp.message(Command("очистить"))
+async def clear_memory_command(message: Message):
+    user_id = message.from_user.id
+
+    waiting_for_day_tasks.discard(user_id)
+    waiting_for_week_tasks.discard(user_id)
+    waiting_for_review.discard(user_id)
+
+    clear_user_memory_data(user_id)
+
+    await message.answer(
+        "Готово. Я очистила всю тестовую память. Можем заново завести актуальные задачи.",
+        reply_markup=main_keyboard
+    )
+
+
 @dp.message(Command("cancel"))
 @dp.message(Command("сброс"))
 async def cancel_input(message: Message):
@@ -1485,6 +1548,23 @@ async def show_full_week_plan(callback: CallbackQuery):
     await callback.message.answer(
         build_full_week_text(callback.from_user.id),
         reply_markup=week_days_keyboard()
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "clear_memory")
+async def clear_memory_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id
+
+    waiting_for_day_tasks.discard(user_id)
+    waiting_for_week_tasks.discard(user_id)
+    waiting_for_review.discard(user_id)
+
+    clear_user_memory_data(user_id)
+
+    await callback.message.answer(
+        "Готово. Я очистила всю тестовую память. Можем заново завести актуальные задачи.",
+        reply_markup=main_keyboard
     )
     await callback.answer()
 
