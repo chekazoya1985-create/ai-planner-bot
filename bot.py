@@ -322,6 +322,22 @@ def weekday_date_by_key(day_key: str) -> datetime:
     return monday + timedelta(days=offset_map[day_key])
 
 
+def has_day_plan_for_user(user_id: int) -> bool:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+    return (
+        user_memory.get("last_plan_type") == "day"
+        and bool(user_memory.get("last_plan_text", "").strip())
+    )
+
+
+def has_week_plan_for_user(user_id: int) -> bool:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+    week_plan = user_memory.get("weekly_plan_days", empty_week_plan())
+    return any(week_plan.get(day) for day in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
+
+
 def get_planning_memory_context(user_id: int) -> str:
     memory, _ = load_github_memory()
     user_memory = ensure_user_memory(memory, user_id)
@@ -1145,7 +1161,7 @@ async def send_daily_reminder():
 async def send_daily_reminder_followup_1():
     for user_id in get_registered_users():
         try:
-            if not get_reminder_status(user_id, "day"):
+            if not get_reminder_status(user_id, "day") and not has_day_plan_for_user(user_id):
                 await bot.send_message(
                     user_id,
                     "Ты ещё не заполнила план на завтра.",
@@ -1158,7 +1174,7 @@ async def send_daily_reminder_followup_1():
 async def send_daily_reminder_followup_2():
     for user_id in get_registered_users():
         try:
-            if not get_reminder_status(user_id, "day"):
+            if not get_reminder_status(user_id, "day") and not has_day_plan_for_user(user_id):
                 await bot.send_message(
                     user_id,
                     "Напиши хотя бы 3 задачи на завтра.",
@@ -1197,7 +1213,7 @@ async def send_weekly_reminder():
 async def send_weekly_reminder_followup_1():
     for user_id in get_registered_users():
         try:
-            if not get_reminder_status(user_id, "week"):
+            if not get_reminder_status(user_id, "week") and not has_week_plan_for_user(user_id):
                 await bot.send_message(
                     user_id,
                     "Напомню: нужно собрать план недели.",
@@ -1210,7 +1226,7 @@ async def send_weekly_reminder_followup_1():
 async def send_weekly_reminder_followup_2():
     for user_id in get_registered_users():
         try:
-            if not get_reminder_status(user_id, "week"):
+            if not get_reminder_status(user_id, "week") and not has_week_plan_for_user(user_id):
                 await bot.send_message(
                     user_id,
                     "Напиши хотя бы 5 задач на неделю.",
@@ -1364,6 +1380,15 @@ async def open_weekly_report(callback: CallbackQuery):
 @dp.callback_query(F.data == "open_week_days")
 async def open_week_days(callback: CallbackQuery):
     register_user_persistently(callback.from_user.id)
+
+    if not has_week_plan_for_user(callback.from_user.id):
+        await callback.message.answer(
+            "Пока нет сохранённого недельного плана. Сначала нажми «🗓 Неделя» и отправь задачи.",
+            reply_markup=main_keyboard
+        )
+        await callback.answer()
+        return
+
     await callback.message.answer(
         "Выбери день недели, чтобы посмотреть задачи.",
         reply_markup=week_days_keyboard()
