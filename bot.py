@@ -331,9 +331,52 @@ def next_day_date() -> datetime:
     return now_moscow() + timedelta(days=1)
 
 
+def today_day_key() -> str:
+    weekday_map = {
+        0: "mon",
+        1: "tue",
+        2: "wed",
+        3: "thu",
+        4: "fri",
+        5: "sat",
+        6: "sun",
+    }
+    return weekday_map[now_moscow().weekday()]
+
+
 def get_current_week_monday() -> datetime:
     current = now_moscow()
     return current - timedelta(days=current.weekday())
+
+
+def parse_day_key_from_text(text: str) -> str | None:
+    value = text.strip().lower()
+
+    mapping = {
+        "пн": "mon",
+        "пон": "mon",
+        "понедельник": "mon",
+
+        "вт": "tue",
+        "вторник": "tue",
+
+        "ср": "wed",
+        "среда": "wed",
+
+        "чт": "thu",
+        "четверг": "thu",
+
+        "пт": "fri",
+        "пятница": "fri",
+
+        "сб": "sat",
+        "суббота": "sat",
+
+        "вс": "sun",
+        "воскресенье": "sun",
+    }
+
+    return mapping.get(value)
 
 
 def weekday_date_by_key(day_key: str) -> datetime:
@@ -564,7 +607,7 @@ def analyze_tasks_with_ai(user_id: int, tasks_text: str, planning_type: str) -> 
 КАТЕГОРИЯ "УБРАТЬ / ПЕРЕНЕСТИ":
 Сюда относятся задачи, которые не влезают реалистично, не являются приоритетными прямо сейчас или могут быть отложены без серьёзного ущерба.
 
-ОСОБЫЕ УТОЧНЕНИЯ ПО ТВОИМ ПОГРАНИЧНЫМ СЛУЧАЯМ:
+ОСОБЫЕ УТОЧНЕНИЯ ПО ПОГРАНИЧНЫМ СЛУЧАЯМ:
 - "Тренировка" => "Жизнь"
 - "Спорт" => "Жизнь"
 - "Зал" => "Жизнь"
@@ -977,6 +1020,28 @@ def clear_user_memory_data(user_id: int) -> None:
     save_github_memory(memory, sha)
 
 
+def move_task_to_weekday(user_id: int, index: int, day_key: str) -> str:
+    memory, sha = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    tasks = user_memory["active_tasks"]
+    week_plan = user_memory.get("weekly_plan_days", empty_week_plan())
+
+    if index < 0 or index >= len(tasks):
+        return "Нет задачи с таким номером."
+
+    if day_key not in week_plan:
+        return "Не удалось определить день недели."
+
+    task = tasks.pop(index)
+    week_plan[day_key].append(task)
+    user_memory["weekly_plan_days"] = week_plan
+    user_memory["moved_tasks"].append(f"{task} → {WEEKDAY_NAMES_RU[day_key]}")
+
+    save_github_memory(memory, sha)
+    return f"⏭ Перенесла: {task} → {WEEKDAY_NAMES_RU[day_key]}"
+
+
 def build_coach_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
     memory, _ = load_github_memory()
     user_memory = ensure_user_memory(memory, user_id)
@@ -1056,6 +1121,9 @@ def build_coach_text(user_id: int) -> str:
     lines.append("Если задач больше трёх — для остальных можно писать:")
     lines.append("сделано 4")
     lines.append("перенос 5")
+    lines.append("перенос 2 на сегодня")
+    lines.append("перенос 1 на завтра")
+    lines.append("перенос 3 на пт")
     lines.append("итог")
 
     return "\n".join(lines)
@@ -1784,6 +1852,52 @@ async def mark_done(message: Message):
     index = int(message.text.split()[1]) - 1
     text = apply_done_by_index(message.from_user.id, index)
     await message.answer(text, reply_markup=build_coach_actions_keyboard(message.from_user.id))
+
+
+@dp.message(F.text.regexp(r"^перенос\s+\d+\s+на\s+.+$"))
+async def move_task_to_day(message: Message):
+    register_user_persistently(message.from_user.id)
+
+    match = re.match(r"^перенос\s+(\d+)\s+на\s+(.+)$", message.text.strip().lower())
+    if not match:
+        await message.answer(
+            "Не поняла команду переноса.",
+            reply_markup=build_coach_actions_keyboard(message.from_user.id)
+        )
+        return
+
+    index = int(match.group(1)) - 1
+    day_text = match.group(2).strip()
+
+    if day_text == "сегодня":
+        day_key = today_day_key()
+    elif day_text == "завтра":
+        target_date = next_day_date()
+        weekday_map = {
+            0: "mon",
+            1: "tue",
+            2: "wed",
+            3: "thu",
+            4: "fri",
+            5: "sat",
+            6: "sun",
+        }
+        day_key = weekday_map[target_date.weekday()]
+    else:
+        day_key = parse_day_key_from_text(day_text)
+
+    if not day_key:
+        await message.answer(
+            "Не поняла день. Примеры: перенос 2 на сегодня, перенос 2 на завтра, перенос 2 на пт",
+            reply_markup=build_coach_actions_keyboard(message.from_user.id)
+        )
+        return
+
+    text = move_task_to_weekday(message.from_user.id, index, day_key)
+    await message.answer(
+        text,
+        reply_markup=build_coach_actions_keyboard(message.from_user.id)
+    )
 
 
 @dp.message(F.text.regexp(r"^перенос\s+\d+$"))
