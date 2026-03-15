@@ -15,8 +15,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from openai import OpenAI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from openai import OpenAI
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -34,18 +34,18 @@ scheduler = AsyncIOScheduler()
 keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
         [
-            InlineKeyboardButton(text="Спланировать день", callback_data="plan_day"),
-            InlineKeyboardButton(text="Спланировать неделю", callback_data="plan_week"),
+            InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
+            InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
         ]
     ]
 )
 
 calendar_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
-        [InlineKeyboardButton(text="Сделать файл календаря", callback_data="make_calendar_file")],
+        [InlineKeyboardButton(text="📆 В календарь", callback_data="make_calendar_file")],
         [
-            InlineKeyboardButton(text="Спланировать день", callback_data="plan_day"),
-            InlineKeyboardButton(text="Спланировать неделю", callback_data="plan_week"),
+            InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
+            InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
         ]
     ]
 )
@@ -361,6 +361,7 @@ async def start(message: Message):
     )
 
 
+@dp.message(Command("coach"))
 @dp.message(Command("коуч"))
 async def coach_mode(message: Message):
     memory, _ = load_github_memory()
@@ -385,6 +386,7 @@ async def coach_mode(message: Message):
     await message.answer("\n".join(lines))
 
 
+@dp.message(Command("memory"))
 @dp.message(Command("память"))
 async def memory_view(message: Message):
     memory, _ = load_github_memory()
@@ -499,7 +501,7 @@ async def mark_done(message: Message):
     user_memory["done_tasks"].append(task)
     save_github_memory(memory, sha)
 
-    await message.answer(f"Готово, отметила как выполнено: {task}")
+    await message.answer(f"✅ Сделано: {task}")
 
 
 @dp.message(F.text.regexp(r"^перенос\s+\d+$"))
@@ -518,7 +520,7 @@ async def mark_moved(message: Message):
     user_memory["moved_tasks"].append(task)
     save_github_memory(memory, sha)
 
-    await message.answer(f"Ок, перенесла: {task}")
+    await message.answer(f"⏭ Перенесла: {task}")
 
 
 @dp.message(F.text.lower() == "итог")
