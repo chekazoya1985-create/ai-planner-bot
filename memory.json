@@ -12,7 +12,18 @@
     "last_plan_type": "day",
     "last_review": "",
     "daily_reviews": [],
-    "weekly_reports": []
+    "weekly_reports": [],
+    "weekly_plan_text": "",
+    "weekly_plan_days": {
+      "mon": [],
+      "tue": [],
+      "wed": [],
+      "thu": [],
+      "fri": [],
+      "sat": [],
+      "sun": []
+    },
+    "weekly_plan_week_key": ""
   },
   "_meta": {
     "registered_users": [
