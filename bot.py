@@ -31,12 +31,19 @@ dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
 scheduler = AsyncIOScheduler()
 
-keyboard = InlineKeyboardMarkup(
+main_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
             InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
-        ]
+        ],
+        [
+            InlineKeyboardButton(text="🧠 Коуч", callback_data="open_coach"),
+            InlineKeyboardButton(text="📂 Память", callback_data="open_memory"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Итог", callback_data="open_summary"),
+        ],
     ]
 )
 
@@ -46,7 +53,14 @@ calendar_keyboard = InlineKeyboardMarkup(
         [
             InlineKeyboardButton(text="📅 День", callback_data="plan_day"),
             InlineKeyboardButton(text="🗓 Неделя", callback_data="plan_week"),
-        ]
+        ],
+        [
+            InlineKeyboardButton(text="🧠 Коуч", callback_data="open_coach"),
+            InlineKeyboardButton(text="📂 Память", callback_data="open_memory"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Итог", callback_data="open_summary"),
+        ],
     ]
 )
 
@@ -281,7 +295,7 @@ async def send_daily_reminder():
             await bot.send_message(
                 user_id,
                 "Пора спланировать завтрашний день",
-                reply_markup=keyboard
+                reply_markup=main_keyboard
             )
         except Exception:
             pass
@@ -294,7 +308,7 @@ async def send_daily_reminder_followup_1():
                 await bot.send_message(
                     user_id,
                     "Ты ещё не заполнила план на завтра.",
-                    reply_markup=keyboard
+                    reply_markup=main_keyboard
                 )
         except Exception:
             pass
@@ -307,7 +321,7 @@ async def send_daily_reminder_followup_2():
                 await bot.send_message(
                     user_id,
                     "Напиши хотя бы 3 задачи на завтра.",
-                    reply_markup=keyboard
+                    reply_markup=main_keyboard
                 )
         except Exception:
             pass
@@ -320,7 +334,7 @@ async def send_weekly_reminder():
             await bot.send_message(
                 user_id,
                 "Давай спланируем неделю",
-                reply_markup=keyboard
+                reply_markup=main_keyboard
             )
         except Exception:
             pass
@@ -333,7 +347,7 @@ async def send_weekly_reminder_followup_1():
                 await bot.send_message(
                     user_id,
                     "Напомню: нужно собрать план недели.",
-                    reply_markup=keyboard
+                    reply_markup=main_keyboard
                 )
         except Exception:
             pass
@@ -346,33 +360,19 @@ async def send_weekly_reminder_followup_2():
                 await bot.send_message(
                     user_id,
                     "Напиши хотя бы 5 задач на неделю.",
-                    reply_markup=keyboard
+                    reply_markup=main_keyboard
                 )
         except Exception:
             pass
 
 
-@dp.message(Command("start"))
-async def start(message: Message):
-    registered_users.add(message.from_user.id)
-    await message.answer(
-        "Привет! Я твой AI-помощник.\nНажми кнопку, чтобы начать планирование.",
-        reply_markup=keyboard
-    )
-
-
-@dp.message(Command("coach"))
-@dp.message(Command("коуч"))
-async def coach_mode(message: Message):
+def build_coach_text(user_id: int) -> str:
     memory, _ = load_github_memory()
-    user_memory = ensure_user_memory(memory, message.from_user.id)
+    user_memory = ensure_user_memory(memory, user_id)
     tasks = user_memory["active_tasks"]
 
     if not tasks:
-        await message.answer(
-            "Пока в памяти нет задач.\nСначала спланируй день или неделю."
-        )
-        return
+        return "Пока в памяти нет задач.\nСначала спланируй день или неделю."
 
     lines = ["Режим коуча включен.\n", "Текущие задачи:"]
     for i, task in enumerate(tasks, start=1):
@@ -383,14 +383,12 @@ async def coach_mode(message: Message):
     lines.append("перенос 2")
     lines.append("итог")
 
-    await message.answer("\n".join(lines))
+    return "\n".join(lines)
 
 
-@dp.message(Command("memory"))
-@dp.message(Command("память"))
-async def memory_view(message: Message):
+def build_memory_text(user_id: int) -> str:
     memory, _ = load_github_memory()
-    user_memory = ensure_user_memory(memory, message.from_user.id)
+    user_memory = ensure_user_memory(memory, user_id)
 
     active = user_memory["active_tasks"]
     done = user_memory["done_tasks"]
@@ -419,7 +417,62 @@ async def memory_view(message: Message):
     else:
         parts.append("— пусто")
 
-    await message.answer("\n".join(parts))
+    return "\n".join(parts)
+
+
+def build_summary_text(user_id: int) -> str:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    done_count = len(user_memory["done_tasks"])
+    active_count = len(user_memory["active_tasks"])
+    moved_count = len(user_memory["moved_tasks"])
+
+    return (
+        "Итог:\n"
+        f"Сделано: {done_count}\n"
+        f"Осталось активных: {active_count}\n"
+        f"Перенесено: {moved_count}"
+    )
+
+
+@dp.message(Command("start"))
+async def start(message: Message):
+    registered_users.add(message.from_user.id)
+    await message.answer(
+        "Привет! Я твой AI-помощник.\nНажми кнопку, чтобы начать планирование.",
+        reply_markup=main_keyboard
+    )
+
+
+@dp.message(Command("coach"))
+@dp.message(Command("коуч"))
+async def coach_mode(message: Message):
+    await message.answer(build_coach_text(message.from_user.id), reply_markup=main_keyboard)
+
+
+@dp.message(Command("memory"))
+@dp.message(Command("память"))
+async def memory_view(message: Message):
+    await message.answer(build_memory_text(message.from_user.id), reply_markup=main_keyboard)
+
+
+@dp.callback_query(F.data == "open_coach")
+async def open_coach(callback: CallbackQuery):
+    await callback.message.answer(build_coach_text(callback.from_user.id), reply_markup=main_keyboard)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "open_memory")
+async def open_memory(callback: CallbackQuery):
+    await callback.message.answer(build_memory_text(callback.from_user.id), reply_markup=main_keyboard)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "open_summary")
+async def open_summary(callback: CallbackQuery):
+    await callback.message.answer(build_summary_text(callback.from_user.id), reply_markup=main_keyboard)
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "plan_day")
@@ -458,7 +511,7 @@ async def make_calendar_file_handler(callback: CallbackQuery):
     if not ai_text:
         await callback.message.answer(
             "Сначала нужно построить план, а потом уже делать файл календаря.",
-            reply_markup=keyboard
+            reply_markup=main_keyboard
         )
         await callback.answer()
         return
@@ -470,7 +523,7 @@ async def make_calendar_file_handler(callback: CallbackQuery):
         await callback.message.answer_document(
             document,
             caption="Готово. Это файл календаря. Скачай его и открой, чтобы добавить события в календарь.",
-            reply_markup=keyboard,
+            reply_markup=main_keyboard,
         )
 
         if os.path.exists(file_path):
@@ -479,7 +532,7 @@ async def make_calendar_file_handler(callback: CallbackQuery):
     except Exception as e:
         await callback.message.answer(
             f"Не получилось сделать файл календаря: {e}",
-            reply_markup=keyboard
+            reply_markup=main_keyboard
         )
 
     await callback.answer()
@@ -494,14 +547,14 @@ async def mark_done(message: Message):
     tasks = user_memory["active_tasks"]
 
     if index < 0 or index >= len(tasks):
-        await message.answer("Нет задачи с таким номером.")
+        await message.answer("Нет задачи с таким номером.", reply_markup=main_keyboard)
         return
 
     task = tasks.pop(index)
     user_memory["done_tasks"].append(task)
     save_github_memory(memory, sha)
 
-    await message.answer(f"✅ Сделано: {task}")
+    await message.answer(f"✅ Сделано: {task}", reply_markup=main_keyboard)
 
 
 @dp.message(F.text.regexp(r"^перенос\s+\d+$"))
@@ -513,32 +566,19 @@ async def mark_moved(message: Message):
     tasks = user_memory["active_tasks"]
 
     if index < 0 or index >= len(tasks):
-        await message.answer("Нет задачи с таким номером.")
+        await message.answer("Нет задачи с таким номером.", reply_markup=main_keyboard)
         return
 
     task = tasks.pop(index)
     user_memory["moved_tasks"].append(task)
     save_github_memory(memory, sha)
 
-    await message.answer(f"⏭ Перенесла: {task}")
+    await message.answer(f"⏭ Перенесла: {task}", reply_markup=main_keyboard)
 
 
 @dp.message(F.text.lower() == "итог")
 async def day_result(message: Message):
-    memory, _ = load_github_memory()
-    user_memory = ensure_user_memory(memory, message.from_user.id)
-
-    done_count = len(user_memory["done_tasks"])
-    active_count = len(user_memory["active_tasks"])
-    moved_count = len(user_memory["moved_tasks"])
-
-    text = (
-        "Итог:\n"
-        f"Сделано: {done_count}\n"
-        f"Осталось активных: {active_count}\n"
-        f"Перенесено: {moved_count}"
-    )
-    await message.answer(text)
+    await message.answer(build_summary_text(message.from_user.id), reply_markup=main_keyboard)
 
 
 @dp.message()
@@ -549,7 +589,7 @@ async def handle_tasks(message: Message):
     if not message.text:
         await message.answer(
             "Пока что пришли задачи текстом.",
-            reply_markup=keyboard
+            reply_markup=main_keyboard
         )
         return
 
@@ -570,7 +610,7 @@ async def handle_tasks(message: Message):
             await message.answer(result, reply_markup=calendar_keyboard)
             waiting_for_day_tasks.discard(user_id)
         except Exception as e:
-            await message.answer(f"Ошибка: {e}", reply_markup=keyboard)
+            await message.answer(f"Ошибка: {e}", reply_markup=main_keyboard)
         return
 
     if user_id in waiting_for_week_tasks:
@@ -590,12 +630,12 @@ async def handle_tasks(message: Message):
             await message.answer(result, reply_markup=calendar_keyboard)
             waiting_for_week_tasks.discard(user_id)
         except Exception as e:
-            await message.answer(f"Ошибка: {e}", reply_markup=keyboard)
+            await message.answer(f"Ошибка: {e}", reply_markup=main_keyboard)
         return
 
     await message.answer(
         "Нажми кнопку ниже, чтобы начать планирование.",
-        reply_markup=keyboard
+        reply_markup=main_keyboard
     )
 
 
