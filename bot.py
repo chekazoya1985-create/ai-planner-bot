@@ -12,13 +12,11 @@ import requests
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
-    Audio,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    Voice,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from openai import OpenAI
@@ -219,7 +217,56 @@ def looks_like_task_list(text: str) -> bool:
     return True
 
 
-def analyze_tasks_with_ai(tasks_text: str, planning_type: str) -> str:
+def get_planning_memory_context(user_id: int) -> str:
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+
+    moved = user_memory.get("moved_tasks", [])[-5:]
+    done = user_memory.get("done_tasks", [])[-5:]
+    daily_reviews = user_memory.get("daily_reviews", [])[-3:]
+
+    review_notes = []
+    for item in daily_reviews:
+        review_notes.append(
+            f"Дата: {item.get('date', '')}\n"
+            f"Что пользователь писал: {item.get('user_text', '')}\n"
+            f"AI-разбор: {item.get('review_text', '')}"
+        )
+
+    return (
+        f"Недавно сделано: {done}\n"
+        f"Недавно перенесено: {moved}\n"
+        f"Последние разборы:\n{chr(10).join(review_notes) if review_notes else 'нет данных'}"
+    )
+
+
+def normalize_tasks_with_ai(text: str) -> str:
+    prompt = f"""
+Пользователь наговорил или написал задачи в свободной форме.
+
+Преобразуй это в короткий список задач.
+Правила:
+- каждая задача с новой строки
+- формулируй кратко и по делу
+- не добавляй пояснений
+- не пиши заголовки
+- если в тексте есть "переношу", "не успела", "надо закончить", преврати это в нормальные задачи на будущее
+- не оставляй фразы вроде "перенести это", "сделать оставшееся" — вместо этого назови конкретную задачу
+
+Текст:
+{text}
+""".strip()
+
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=prompt,
+    )
+    return response.output_text.strip()
+
+
+def analyze_tasks_with_ai(user_id: int, tasks_text: str, planning_type: str) -> str:
+    memory_context = get_planning_memory_context(user_id)
+
     if planning_type == "завтра":
         planning_rules = """
 Сделай план как умный AI-планировщик дня, похожий на Motion.
@@ -234,6 +281,7 @@ def analyze_tasks_with_ai(tasks_text: str, planning_type: str) -> str:
 - В начале дня ставь самые важные и требующие концентрации задачи.
 - Рутину и лёгкие задачи ставь позже.
 - Не делай план хаотичным: он должен быть реалистичным.
+- Учитывай прошлые переносы и последние разборы дня: если что-то регулярно срывается, не перегружай этим день.
 """
     else:
         planning_rules = """
@@ -245,12 +293,16 @@ def analyze_tasks_with_ai(tasks_text: str, planning_type: str) -> str:
 - Тяжёлые задачи распределяй.
 - Если задач слишком много, часть перенеси.
 - План должен быть реалистичным и не перегруженным.
+- Учитывай прошлые переносы и последние разборы дня: если что-то регулярно срывается, распределяй мягче.
 """
 
     prompt = f"""
-Ты помощник по планированию.
+Ты помощник по планированию и AI-коуч.
 
 Пользователь прислал список задач на {planning_type}.
+
+Контекст из памяти:
+{memory_context}
 
 {planning_rules}
 
@@ -682,12 +734,14 @@ def build_summary_text(user_id: int) -> str:
     done_count = len(user_memory["done_tasks"])
     active_count = len(user_memory["active_tasks"])
     moved_count = len(user_memory["moved_tasks"])
+    reviews_count = len(user_memory.get("daily_reviews", []))
 
     return (
         "Итог:\n"
         f"Сделано: {done_count}\n"
         f"Осталось активных: {active_count}\n"
-        f"Перенесено: {moved_count}"
+        f"Перенесено: {moved_count}\n"
+        f"Разборов в памяти: {reviews_count}"
     )
 
 
@@ -773,7 +827,7 @@ async def process_text_input(message: Message, text: str):
             user_memory["moved_tasks"] = []
             save_github_memory(memory, sha)
 
-            result = analyze_tasks_with_ai(text, "завтра")
+            result = analyze_tasks_with_ai(user_id, text, "завтра")
 
             memory, sha = load_github_memory()
             user_memory = ensure_user_memory(memory, user_id)
@@ -809,7 +863,7 @@ async def process_text_input(message: Message, text: str):
             user_memory["moved_tasks"] = []
             save_github_memory(memory, sha)
 
-            result = analyze_tasks_with_ai(text, "неделю")
+            result = analyze_tasks_with_ai(user_id, text, "неделю")
 
             memory, sha = load_github_memory()
             user_memory = ensure_user_memory(memory, user_id)
@@ -1186,7 +1240,15 @@ async def handle_voice(message: Message):
             reply_markup=main_keyboard
         )
 
-        await process_text_input(message, text)
+        processed_text = text
+        if user_id in waiting_for_day_tasks or user_id in waiting_for_week_tasks:
+            processed_text = normalize_tasks_with_ai(text)
+            await message.answer(
+                f"Поняла это как задачи:\n{processed_text}",
+                reply_markup=main_keyboard
+            )
+
+        await process_text_input(message, processed_text)
 
     except Exception as e:
         await message.answer(
@@ -1213,7 +1275,15 @@ async def handle_audio(message: Message):
             reply_markup=main_keyboard
         )
 
-        await process_text_input(message, text)
+        processed_text = text
+        if user_id in waiting_for_day_tasks or user_id in waiting_for_week_tasks:
+            processed_text = normalize_tasks_with_ai(text)
+            await message.answer(
+                f"Поняла это как задачи:\n{processed_text}",
+                reply_markup=main_keyboard
+            )
+
+        await process_text_input(message, processed_text)
 
     except Exception as e:
         await message.answer(
