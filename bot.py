@@ -331,6 +331,17 @@ def next_day_date() -> datetime:
     return now_moscow() + timedelta(days=1)
 
 
+def default_day_plan_date() -> datetime:
+    now = now_moscow()
+    cutoff_minutes = 20 * 60 + 30
+    now_minutes = now.hour * 60 + now.minute
+
+    if now_minutes < cutoff_minutes:
+        return now
+
+    return now + timedelta(days=1)
+
+
 def today_day_key() -> str:
     weekday_map = {
         0: "mon",
@@ -342,6 +353,19 @@ def today_day_key() -> str:
         6: "sun",
     }
     return weekday_map[now_moscow().weekday()]
+
+
+def day_key_from_date(dt: datetime) -> str:
+    weekday_map = {
+        0: "mon",
+        1: "tue",
+        2: "wed",
+        3: "thu",
+        4: "fri",
+        5: "sat",
+        6: "sun",
+    }
+    return weekday_map[dt.weekday()]
 
 
 def get_current_week_monday() -> datetime:
@@ -456,7 +480,7 @@ def normalize_tasks_with_ai(text: str) -> str:
 def analyze_tasks_with_ai(user_id: int, tasks_text: str, planning_type: str) -> str:
     memory_context = get_planning_memory_context(user_id)
 
-    if planning_type == "завтра":
+    if planning_type in ("сегодня", "завтра"):
         planning_rules = """
 Сделай план как умный AI-планировщик дня, похожий на Motion.
 
@@ -489,6 +513,10 @@ def analyze_tasks_with_ai(user_id: int, tasks_text: str, planning_type: str) -> 
 Ты помощник по планированию и AI-коуч.
 
 Пользователь прислал список задач на {planning_type}.
+
+Если planning_type = "сегодня", планируй задачи на текущий день.
+Если planning_type = "завтра", планируй задачи на следующий день.
+Если задача явно не помечена пользователем как "завтра" или "потом", считай, что она относится к переданному planning_type.
 
 Контекст из памяти:
 {memory_context}
@@ -666,8 +694,8 @@ def analyze_tasks_with_ai(user_id: int, tasks_text: str, planning_type: str) -> 
     return response.output_text.strip()
 
 
-def build_day_plan_header(ai_text: str) -> str:
-    plan_date = next_day_date()
+def build_day_plan_header(ai_text: str, plan_date: datetime | None = None) -> str:
+    plan_date = plan_date or default_day_plan_date()
     header = f"📅 План на день — {format_russian_date(plan_date)}\n\n"
     return header + ai_text
 
@@ -945,9 +973,16 @@ def make_ics_file(user_id: int, ai_text: str) -> str:
     if not plan_items:
         raise ValueError("В ответе AI не найден блок 'План:' с временем.")
 
-    tomorrow = next_day_date()
-    date_str = tomorrow.strftime("%Y%m%d")
+    memory, _ = load_github_memory()
+    user_memory = ensure_user_memory(memory, user_id)
+    saved_date = user_memory.get("last_day_plan_date", "").strip()
 
+    if saved_date:
+        plan_dt = datetime.strptime(saved_date, "%Y-%m-%d")
+    else:
+        plan_dt = default_day_plan_date()
+
+    date_str = plan_dt.strftime("%Y%m%d")
     file_name = f"plan_{user_id}.ics"
 
     ics_lines = [
@@ -1267,12 +1302,20 @@ def get_saved_day_plan_text(user_id: int) -> str:
 
     plan_text = user_memory.get("last_plan_text", "").strip()
     plan_type = user_memory.get("last_plan_type", "")
+    saved_date = user_memory.get("last_day_plan_date", "").strip()
 
     if plan_type != "day" or not plan_text:
-        return "Пока нет сохранённого плана на завтра. Нажми «📅 День» и отправь задачи."
+        return "Пока нет сохранённого плана на день. Нажми «📅 День» и отправь задачи."
 
     if "📅 План на день" not in plan_text:
-        plan_date = next_day_date()
+        try:
+            if saved_date:
+                plan_date = datetime.strptime(saved_date, "%Y-%m-%d").replace(tzinfo=MOSCOW_TZ)
+            else:
+                plan_date = default_day_plan_date()
+        except Exception:
+            plan_date = default_day_plan_date()
+
         header = f"📅 План на день — {format_russian_date(plan_date)}\n\n"
         return header + plan_text
 
@@ -1354,14 +1397,21 @@ async def process_text_input(message: Message, text: str):
             user_memory["moved_tasks"] = []
             save_github_memory(memory, sha)
 
-            ai_result = analyze_tasks_with_ai(user_id, text, "завтра")
-            result = build_day_plan_header(ai_result)
+            plan_date = default_day_plan_date()
+            planning_label = "сегодня" if plan_date.date() == now_moscow().date() else "завтра"
+
+            ai_result = analyze_tasks_with_ai(user_id, text, planning_label)
+            result = build_day_plan_header(ai_result, plan_date)
 
             memory, sha = load_github_memory()
             user_memory = ensure_user_memory(memory, user_id)
             user_memory["last_plan_text"] = result
             user_memory["last_plan_type"] = "day"
-            user_memory["last_day_plan_date"] = next_day_date().strftime("%Y-%m-%d")
+            user_memory["last_day_plan_date"] = plan_date.strftime("%Y-%m-%d")
+
+            day_key = day_key_from_date(plan_date)
+            user_memory["weekly_plan_days"][day_key] = list(tasks)
+
             save_github_memory(memory, sha)
 
             waiting_for_day_tasks.discard(user_id)
@@ -1428,7 +1478,7 @@ async def send_daily_reminder():
             set_reminder_status(user_id, "day", False)
             await bot.send_message(
                 user_id,
-                "Пора спланировать завтрашний день",
+                "Пора спланировать день",
                 reply_markup=main_keyboard
             )
         except Exception:
@@ -1441,7 +1491,7 @@ async def send_daily_reminder_followup_1():
             if not get_reminder_status(user_id, "day") and not has_day_plan_for_user(user_id):
                 await bot.send_message(
                     user_id,
-                    "Ты ещё не заполнила план на завтра.",
+                    "Ты ещё не заполнила план на день.",
                     reply_markup=main_keyboard
                 )
         except Exception:
@@ -1454,7 +1504,7 @@ async def send_daily_reminder_followup_2():
             if not get_reminder_status(user_id, "day") and not has_day_plan_for_user(user_id):
                 await bot.send_message(
                     user_id,
-                    "Напиши хотя бы 3 задачи на завтра.",
+                    "Напиши хотя бы 3 задачи на день.",
                     reply_markup=main_keyboard
                 )
         except Exception:
@@ -1776,9 +1826,10 @@ async def plan_day(callback: CallbackQuery):
     waiting_for_review.discard(user_id)
     set_reminder_status(user_id, "day", True)
 
-    plan_date = next_day_date()
+    plan_date = default_day_plan_date()
     await callback.message.answer(
         f"Напиши задачи на день — {format_russian_date(plan_date)}.\n"
+        f"До 20:30 задачи по умолчанию планируются на сегодня, после 20:30 — на завтра.\n"
         f"Можно текстом или голосовым.\n"
         f"Если передумала — отправь /сброс"
     )
@@ -1873,16 +1924,7 @@ async def move_task_to_day(message: Message):
         day_key = today_day_key()
     elif day_text == "завтра":
         target_date = next_day_date()
-        weekday_map = {
-            0: "mon",
-            1: "tue",
-            2: "wed",
-            3: "thu",
-            4: "fri",
-            5: "sat",
-            6: "sun",
-        }
-        day_key = weekday_map[target_date.weekday()]
+        day_key = day_key_from_date(target_date)
     else:
         day_key = parse_day_key_from_text(day_text)
 
